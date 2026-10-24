@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/daily_log.dart';
 import '../models/habit.dart';
-import '../database/database_helper.dart';
 import '../state/habit_list_notifier.dart';
 import '../analytics/habit_analytics_engine.dart';
 
@@ -90,15 +89,15 @@ class _DebugHatchBottomSheetState extends ConsumerState<DebugHatchBottomSheet> {
     setState(() => _isSaving = true);
     final dateStr = HabitAnalyticsEngine.todayLogDate(_selectedDate);
 
-    final log = DailyLog(
-      habitId: widget.habit.id!,
-      logDate: dateStr,
-      intensity: _intensity.round(),
-      note: _noteController.text.trim().isEmpty ? null : _noteController.text.trim(),
-    );
-
-    await DatabaseHelper.instance.insertLog(log);
-    await ref.read(habitListProvider.notifier).refresh();
+    // Update in-memory state (bypassing SQLite for web design preview)
+    await ref.read(habitListProvider.notifier).overrideLog(
+          habitId: widget.habit.id!,
+          logDate: dateStr,
+          intensity: _intensity.round(),
+          note: _noteController.text.trim().isEmpty
+              ? null
+              : _noteController.text.trim(),
+        );
 
     if (mounted) {
       Navigator.of(context).pop();
