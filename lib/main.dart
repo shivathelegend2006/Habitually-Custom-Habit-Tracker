@@ -21,7 +21,7 @@ class HabitTrackerApp extends StatelessWidget {
       title: 'Habitually...',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF2B2A2A),
+        scaffoldBackgroundColor: const Color(0xFF111113),
       ),
       home: const MainScreen(),
     );
