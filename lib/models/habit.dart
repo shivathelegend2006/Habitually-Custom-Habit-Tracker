@@ -3,6 +3,7 @@ class Habit {
   final String name;
   final String colorCode;
   final bool isArchived;
+  final bool isPaused;
   final DateTime createdAt;
   final int maxStreak;
   final int activeDays;
@@ -12,6 +13,7 @@ class Habit {
     required this.name,
     required this.colorCode,
     this.isArchived = false,
+    this.isPaused = false,
     required this.createdAt,
     this.maxStreak = 0,
     this.activeDays = 0,
@@ -23,6 +25,7 @@ class Habit {
     String? name,
     String? colorCode,
     bool? isArchived,
+    bool? isPaused,
     DateTime? createdAt,
     int? maxStreak,
     int? activeDays,
@@ -32,6 +35,7 @@ class Habit {
       name: name ?? this.name,
       colorCode: colorCode ?? this.colorCode,
       isArchived: isArchived ?? this.isArchived,
+      isPaused: isPaused ?? this.isPaused,
       createdAt: createdAt ?? this.createdAt,
       maxStreak: maxStreak ?? this.maxStreak,
       activeDays: activeDays ?? this.activeDays,
@@ -44,6 +48,7 @@ class Habit {
       'name': name,
       'color_code': colorCode,
       'is_archived': isArchived ? 1 : 0,
+      'is_paused': isPaused ? 1 : 0,
       'created_at': createdAt.toIso8601String(),
       'max_streak': maxStreak,
       'active_days': activeDays,
@@ -60,7 +65,8 @@ class Habit {
       id: map['id'] as int?,
       name: map['name'] as String,
       colorCode: map['color_code'] as String,
-      isArchived: (map['is_archived'] as int) == 1,
+      isArchived: (map['is_archived'] as int?) == 1,
+      isPaused: (map['is_paused'] as int?) == 1,
       createdAt: DateTime.parse(map['created_at'] as String),
       maxStreak: (map['max_streak'] as int?) ?? 0,
       activeDays: (map['active_days'] as int?) ?? 0,

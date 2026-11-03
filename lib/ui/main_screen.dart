@@ -1,6 +1,9 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../database/database_helper.dart';
+import '../models/habit.dart';
+import '../models/daily_log.dart';
 import 'habit_intensity_log_overlay.dart';
 
 /// Presentation model for a habit in the tracker.
@@ -205,91 +208,159 @@ class _MainScreenState extends State<MainScreen> {
   String _targetLogDateKey = '';
   String _targetLogDateDisplay = '';
 
-  // Active Habit List (Initialized with 3 sample habits in distinct colors)
-  late List<HabitItem> _habits;
+  // Active Habit List (Persisted via SQLite DatabaseHelper)
+  List<HabitItem> _habits = [];
+  bool _isLoadingHabits = true;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController();
+    _initDatabaseAndLoadHabits();
+  }
 
-    // 3 Sample Habits in Vibrant Theme Colors
-    _habits = [
-      // 1. Chanting (Solar Orange)
-      HabitItem(
-        id: '1',
-        name: 'Chanting',
-        color: const Color(0xFFFF7A00),
-        activeDays: 13,
-        maxStreak: 5,
-        isLoggedToday: false,
-        isPaused: false,
-        loggedDates: {
-          '2026-10-03': 9,
-          '2026-10-04': 9,
-          '2026-10-06': 9,
-          '2026-10-08': 6,
-          '2026-10-10': 8,
-          '2026-10-14': 9,
-          '2026-10-15': 7,
-          '2026-10-17': 8,
-          '2026-10-20': 9,
-          '2026-10-23': 8,
-          '2026-10-27': 9,
-          '2026-10-30': 8,
-          '2026-10-31': 10,
-        },
-      ),
+  static String _colorToHex(Color color) {
+    return '#';
+  }
 
-      // 2. Deep Meditation (Emerald Mint)
-      HabitItem(
-        id: '2',
-        name: 'Deep Meditation',
-        color: const Color(0xFF00D672),
-        activeDays: 14,
-        maxStreak: 14,
-        isLoggedToday: false,
-        isPaused: false,
-        loggedDates: {
-          '2026-10-11': 9,
-          '2026-10-12': 8,
-          '2026-10-13': 9,
-          '2026-10-14': 8,
-          '2026-10-15': 9,
-          '2026-10-16': 9,
-          '2026-10-17': 7,
-          '2026-10-18': 8,
-          '2026-10-19': 9,
-          '2026-10-20': 9,
-          '2026-10-21': 8,
-          '2026-10-22': 9,
-          '2026-10-23': 9,
-          '2026-10-24': 10,
-        },
-      ),
+  static Color _parseColorFromHex(String hex) {
+    try {
+      final clean = hex.replaceAll('#', '').replaceAll('0x', '');
+      if (clean.length == 6) {
+        return Color(int.parse('FF', radix: 16));
+      } else if (clean.length == 8) {
+        return Color(int.parse(clean, radix: 16));
+      }
+    } catch (_) {}
+    return const Color(0xFFFF7A00);
+  }
 
-      // 3. Cold Shower (Electric Blue)
-      HabitItem(
-        id: '3',
-        name: 'Cold Shower',
-        color: const Color(0xFF0088FF),
-        activeDays: 9,
-        maxStreak: 9,
-        isLoggedToday: false,
-        isPaused: false,
-        loggedDates: {
-          '2026-10-16': 8,
-          '2026-10-17': 9,
-          '2026-10-18': 8,
-          '2026-10-19': 9,
-          '2026-10-20': 8,
-          '2026-10-21': 9,
-          '2026-10-22': 7,
-          '2026-10-23': 9,
-          '2026-10-24': 9,
-        },
-      ),
-    ];
+  Future<void> _initDatabaseAndLoadHabits() async {
+    try {
+      final db = DatabaseHelper.instance;
+      List<Habit> dbHabits = await db.fetchActiveHabits();
+
+      // If database is empty (first app launch), seed with the 3 default habits & logs
+      if (dbHabits.isEmpty) {
+        await _seedInitialHabits();
+        dbHabits = await db.fetchActiveHabits();
+      }
+
+      final List<HabitItem> loadedHabits = [];
+      final todayKey = _currentISTDateKey;
+
+      for (final h in dbHabits) {
+        if (h.id == null) continue;
+        final logs = await db.fetchLogsForHabit(h.id!);
+        final Map<String, int> dates = {};
+        final Map<String, String> notes = {};
+
+        for (final l in logs) {
+          dates[l.logDate] = l.intensity;
+          if (l.note != null && l.note!.isNotEmpty) {
+            notes[l.logDate] = l.note!;
+          }
+        }
+
+        final isLoggedToday = dates.containsKey(todayKey);
+        final activeDays = h.activeDays > 0 ? h.activeDays : dates.length;
+        final maxStreak = h.maxStreak > 0 ? h.maxStreak : _calculateMaxStreak(dates);
+
+        loadedHabits.add(
+          HabitItem(
+            id: h.id.toString(),
+            name: h.name,
+            color: _parseColorFromHex(h.colorCode),
+            activeDays: activeDays,
+            maxStreak: maxStreak,
+            isLoggedToday: isLoggedToday,
+            isPaused: h.isPaused,
+            loggedDates: dates,
+            loggedNotes: notes,
+          ),
+        );
+      }
+
+      if (mounted) {
+        setState(() {
+          _habits = loadedHabits;
+          _isLoadingHabits = false;
+          if (_activeHabitIndex >= _habits.length) {
+            _activeHabitIndex = _habits.isEmpty ? 0 : _habits.length - 1;
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading habits from database: ');
+      if (mounted) {
+        setState(() {
+          _isLoadingHabits = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _seedInitialHabits() async {
+    final db = DatabaseHelper.instance;
+
+    // 1. Chanting (Solar Orange: #FFFF7A00)
+    final h1 = Habit(
+      name: 'Chanting',
+      colorCode: '#FFFF7A00',
+      activeDays: 13,
+      maxStreak: 5,
+      isPaused: false,
+      createdAt: DateTime.now().subtract(const Duration(days: 35)),
+    );
+    final id1 = await db.insertHabit(h1);
+    final h1Logs = {
+      '2026-10-03': 9, '2026-10-04': 9, '2026-10-06': 9, '2026-10-08': 6,
+      '2026-10-10': 8, '2026-10-14': 9, '2026-10-15': 7, '2026-10-17': 8,
+      '2026-10-20': 9, '2026-10-23': 8, '2026-10-27': 9, '2026-10-30': 8,
+      '2026-10-31': 10,
+    };
+    for (final entry in h1Logs.entries) {
+      await db.insertLog(DailyLog(habitId: id1, logDate: entry.key, intensity: entry.value));
+    }
+
+    // 2. Deep Meditation (Emerald Mint: #FF00D672)
+    final h2 = Habit(
+      name: 'Deep Meditation',
+      colorCode: '#FF00D672',
+      activeDays: 14,
+      maxStreak: 14,
+      isPaused: false,
+      createdAt: DateTime.now().subtract(const Duration(days: 35)),
+    );
+    final id2 = await db.insertHabit(h2);
+    final h2Logs = {
+      '2026-10-11': 9, '2026-10-12': 8, '2026-10-13': 9, '2026-10-14': 8,
+      '2026-10-15': 9, '2026-10-16': 9, '2026-10-17': 7, '2026-10-18': 8,
+      '2026-10-19': 9, '2026-10-20': 9, '2026-10-21': 8, '2026-10-22': 9,
+      '2026-10-23': 9, '2026-10-24': 10,
+    };
+    for (final entry in h2Logs.entries) {
+      await db.insertLog(DailyLog(habitId: id2, logDate: entry.key, intensity: entry.value));
+    }
+
+    // 3. Cold Shower (Electric Blue: #FF0088FF)
+    final h3 = Habit(
+      name: 'Cold Shower',
+      colorCode: '#FF0088FF',
+      activeDays: 9,
+      maxStreak: 9,
+      isPaused: false,
+      createdAt: DateTime.now().subtract(const Duration(days: 35)),
+    );
+    final id3 = await db.insertHabit(h3);
+    final h3Logs = {
+      '2026-10-16': 8, '2026-10-17': 9, '2026-10-18': 8, '2026-10-19': 9,
+      '2026-10-20': 8, '2026-10-21': 9, '2026-10-22': 7, '2026-10-23': 9,
+      '2026-10-24': 9,
+    };
+    for (final entry in h3Logs.entries) {
+      await db.insertLog(DailyLog(habitId: id3, logDate: entry.key, intensity: entry.value));
+    }
   }
 
   @override
@@ -389,6 +460,12 @@ class _MainScreenState extends State<MainScreen> {
 
   void _deleteHabit(int index) {
     HapticFeedback.mediumImpact();
+    if (index < 0 || index >= _habits.length) return;
+    final habitToDelete = _habits[index];
+    final habitIdInt = int.tryParse(habitToDelete.id);
+    if (habitIdInt != null) {
+      DatabaseHelper.instance.deleteHabit(habitIdInt);
+    }
     setState(() {
       _habits.removeAt(index);
       if (_habits.isEmpty) {
@@ -421,10 +498,6 @@ class _MainScreenState extends State<MainScreen> {
                 decoration: BoxDecoration(
                   color: const Color(0xFF1E1E24),
                   borderRadius: BorderRadius.circular(22),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.10),
-                    width: 1,
-                  ),
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -515,7 +588,6 @@ class _MainScreenState extends State<MainScreen> {
               decoration: BoxDecoration(
                 color: const Color(0xFF141417),
                 borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: const Color(0xFF26262B), width: 1),
                 boxShadow: const [
                   BoxShadow(
                     color: Colors.black87,
@@ -599,6 +671,10 @@ class _MainScreenState extends State<MainScreen> {
                         setState(() {
                           habit.isPaused = !habit.isPaused;
                         });
+                        final hId = int.tryParse(habit.id);
+                        if (hId != null) {
+                          DatabaseHelper.instance.updateHabitPaused(hId, habit.isPaused);
+                        }
                       },
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -720,10 +796,6 @@ class _MainScreenState extends State<MainScreen> {
                 decoration: BoxDecoration(
                   color: const Color(0xFF1E1E24),
                   borderRadius: BorderRadius.circular(22),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.10),
-                    width: 1,
-                  ),
                   boxShadow: const [
                     BoxShadow(
                       color: Colors.black87,
@@ -744,12 +816,6 @@ class _MainScreenState extends State<MainScreen> {
                             ? const Color(0xFF0F2618)
                             : const Color(0xFF2E1C0A),
                         shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isCurrentlyPaused
-                              ? const Color(0xFF10B981).withOpacity(0.4)
-                              : const Color(0xFFF59E0B).withOpacity(0.4),
-                          width: 1,
-                        ),
                       ),
                       child: Icon(
                         isCurrentlyPaused
@@ -829,6 +895,10 @@ class _MainScreenState extends State<MainScreen> {
                               setState(() {
                                 habit.isPaused = !habit.isPaused;
                               });
+                              final hId = int.tryParse(habit.id);
+                              if (hId != null) {
+                                DatabaseHelper.instance.updateHabitPaused(hId, habit.isPaused);
+                              }
                               Navigator.of(ctx).pop();
                             },
                             style: ElevatedButton.styleFrom(
@@ -911,7 +981,10 @@ class _MainScreenState extends State<MainScreen> {
                     ),
                   ],
                 ),
-                padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.90,
+                ),
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -927,7 +1000,7 @@ class _MainScreenState extends State<MainScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 16),
 
                     // Sheet Header
                     Row(
@@ -947,12 +1020,22 @@ class _MainScreenState extends State<MainScreen> {
                           icon: const Icon(Icons.close_rounded, color: textSecondary, size: 22),
                           onPressed: () => Navigator.of(context).pop(),
                           splashRadius: 20,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
 
-                    // Habit Name Input
+                    // Scrollable content area so virtual keyboard + expandable color picker never overflows
+                    Flexible(
+                      child: SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // Habit Name Input
                     const Text(
                       'Habit Name',
                       style: TextStyle(
@@ -991,7 +1074,7 @@ class _MainScreenState extends State<MainScreen> {
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: BorderSide(color: selectedColor, width: 1.5),
+                          borderSide: BorderSide.none,
                         ),
                       ),
                     ),
@@ -1143,10 +1226,6 @@ class _MainScreenState extends State<MainScreen> {
                         decoration: BoxDecoration(
                           color: const Color(0xFF202026),
                           borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.08),
-                            width: 1,
-                          ),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1315,13 +1394,25 @@ class _MainScreenState extends State<MainScreen> {
 
                     // Create Button
                     ElevatedButton(
-                      onPressed: () {
+                      onPressed: () async {
                         final name = textController.text.trim();
                         if (name.isEmpty) return;
 
                         HapticFeedback.mediumImpact();
+
+                        // Persist habit to SQLite
+                        final habitModel = Habit(
+                          name: name,
+                          colorCode: _colorToHex(selectedColor),
+                          activeDays: 0,
+                          maxStreak: 0,
+                          isPaused: false,
+                          createdAt: DateTime.now(),
+                        );
+                        final newId = await DatabaseHelper.instance.insertHabit(habitModel);
+
                         final newHabit = HabitItem(
-                          id: DateTime.now().millisecondsSinceEpoch.toString(),
+                          id: newId.toString(),
                           name: name,
                           color: selectedColor,
                           activeDays: 0,
@@ -1331,23 +1422,25 @@ class _MainScreenState extends State<MainScreen> {
                           loggedDates: {},
                         );
 
-                        setState(() {
-                          _habits.add(newHabit);
-                          _activeHabitIndex = _habits.length - 1;
-                        });
+                        if (mounted) {
+                          setState(() {
+                            _habits.add(newHabit);
+                            _activeHabitIndex = _habits.length - 1;
+                          });
 
-                        Navigator.of(context).pop();
+                          Navigator.of(context).pop();
 
-                        // Animate PageView to the new habit
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (_pageController.hasClients) {
-                            _pageController.animateToPage(
-                              _activeHabitIndex,
-                              duration: const Duration(milliseconds: 320),
-                              curve: Curves.easeOutCubic,
-                            );
-                          }
-                        });
+                          // Animate PageView to the new habit
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (_pageController.hasClients) {
+                              _pageController.animateToPage(
+                                _activeHabitIndex,
+                                duration: const Duration(milliseconds: 320),
+                                curve: Curves.easeOutCubic,
+                              );
+                            }
+                          });
+                        }
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: selectedColor,
@@ -1365,6 +1458,10 @@ class _MainScreenState extends State<MainScreen> {
                           fontSize: 15,
                           fontWeight: FontWeight.w800,
                           letterSpacing: -0.2,
+                        ),
+                      ),
+                    ),
+                          ],
                         ),
                       ),
                     ),
@@ -1657,6 +1754,22 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoadingHabits) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF141416),
+        body: Center(
+          child: SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF7A00)),
+            ),
+          ),
+        ),
+      );
+    }
+
     // When on the final page index (which is _habits.length), or when _habits is empty,
     // currentHabit is null, triggering the Moonlight Graphite Empty State Theme!
     final bool isOnEndEmptyPage = _habits.isEmpty || _activeHabitIndex == _habits.length;
@@ -2043,6 +2156,23 @@ class _MainScreenState extends State<MainScreen> {
                         habit.maxStreak = currentMax;
                       }
                     });
+
+                    final hId = int.tryParse(habit.id);
+                    if (hId != null) {
+                      DatabaseHelper.instance.insertLog(
+                        DailyLog(
+                          habitId: hId,
+                          logDate: dateKey,
+                          intensity: intensity,
+                          note: note,
+                        ),
+                      );
+                      DatabaseHelper.instance.updateHabitStats(
+                        habitId: hId,
+                        activeDays: habit.activeDays,
+                        maxStreak: habit.maxStreak,
+                      );
+                    }
                   },
                   onLogRemoved: (habit, dateKey) {
                     setState(() {
@@ -2054,6 +2184,16 @@ class _MainScreenState extends State<MainScreen> {
                       habit.activeDays = habit.loggedDates.length;
                       habit.maxStreak = _calculateMaxStreak(habit.loggedDates);
                     });
+
+                    final hId = int.tryParse(habit.id);
+                    if (hId != null) {
+                      DatabaseHelper.instance.deleteLog(hId, dateKey);
+                      DatabaseHelper.instance.updateHabitStats(
+                        habitId: hId,
+                        activeDays: habit.activeDays,
+                        maxStreak: habit.maxStreak,
+                      );
+                    }
                   },
                 ),
               ),
@@ -2172,10 +2312,6 @@ class _MainScreenState extends State<MainScreen> {
               decoration: BoxDecoration(
                 color: const Color(0xFF202026),
                 shape: BoxShape.circle,
-                border: Border.all(
-                  color: Colors.white.withOpacity(0.18),
-                  width: 1.5,
-                ),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.white.withOpacity(0.08),
@@ -2214,10 +2350,6 @@ class _MainScreenState extends State<MainScreen> {
           decoration: BoxDecoration(
             color: const Color(0xFF19191D),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.06),
-              width: 1.0,
-            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2322,10 +2454,6 @@ class _MainScreenState extends State<MainScreen> {
                               decoration: BoxDecoration(
                                 color: const Color(0xFF332008),
                                 borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                  color: const Color(0xFFD97706).withOpacity(0.5),
-                                  width: 0.8,
-                                ),
                               ),
                               child: const Text(
                                 'Paused',
@@ -2426,12 +2554,6 @@ class _MainScreenState extends State<MainScreen> {
                     decoration: BoxDecoration(
                       color: habit.isLoggedToday ? habitTheme.surfaceSubtle : habit.color,
                       borderRadius: BorderRadius.circular(26),
-                      border: habit.isLoggedToday
-                          ? Border.all(
-                              color: habit.color.withOpacity(0.5),
-                              width: 1.5,
-                            )
-                          : null,
                       boxShadow: habit.isLoggedToday
                           ? []
                           : [

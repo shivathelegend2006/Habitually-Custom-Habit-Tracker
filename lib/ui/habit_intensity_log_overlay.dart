@@ -314,12 +314,7 @@ class _LiquidPainter extends CustomPainter {
 
     canvas.restore(); // End clipping
 
-    // 7. Outer Glass Rim Border (Minimal hairline border)
-    final rimPaint = Paint()
-      ..color = Colors.white.withOpacity(0.12)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0;
-    canvas.drawRRect(rrect, rimPaint);
+    // 7. Clean borderless glass edge (Zero AI outlines)
 
     // 8. Soft, serene outer aura emanating from the liquid
     final bloomPaint = Paint()
@@ -503,7 +498,6 @@ class _HabitIntensityLogOverlayState extends State<HabitIntensityLogOverlay> {
                 decoration: BoxDecoration(
                   color: const Color(0xFF14141B),
                   borderRadius: BorderRadius.circular(22),
-                  border: Border.all(color: Colors.white.withOpacity(0.12)),
                   boxShadow: const [
                     BoxShadow(color: Colors.black87, blurRadius: 30, offset: Offset(0, 10)),
                   ],
@@ -541,11 +535,11 @@ class _HabitIntensityLogOverlayState extends State<HabitIntensityLogOverlay> {
                         contentPadding: const EdgeInsets.all(12),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                          borderSide: BorderSide.none,
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: habit.color.withOpacity(0.6)),
+                          borderSide: BorderSide.none,
                         ),
                       ),
                     ),
@@ -709,10 +703,6 @@ class _HabitIntensityLogOverlayState extends State<HabitIntensityLogOverlay> {
               ],
             ),
             borderRadius: BorderRadius.circular(32),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.14),
-              width: 1.2,
-            ),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withOpacity(0.40),
@@ -824,9 +814,8 @@ class _HabitIntensityLogOverlayState extends State<HabitIntensityLogOverlay> {
                       height: 46,
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF161620).withOpacity(0.60),
+                        color: const Color(0xFF161620).withOpacity(0.75),
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: Colors.white.withOpacity(0.08)),
                       ),
                       child: Row(
                         children: [
@@ -864,13 +853,8 @@ class _HabitIntensityLogOverlayState extends State<HabitIntensityLogOverlay> {
                         decoration: BoxDecoration(
                           color: hasNote
                               ? habit.color.withOpacity(0.15)
-                              : const Color(0xFF161620).withOpacity(0.60),
+                              : const Color(0xFF161620).withOpacity(0.75),
                           borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: hasNote
-                                ? habit.color.withOpacity(0.50)
-                                : Colors.white.withOpacity(0.08),
-                          ),
                         ),
                         child: Row(
                           children: [
@@ -1008,9 +992,8 @@ class _HabitIntensityLogOverlayState extends State<HabitIntensityLogOverlay> {
             curve: Curves.easeOutCubic,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
             decoration: BoxDecoration(
-              color: const Color(0xFF1E1E2A).withOpacity(0.75),
+              color: const Color(0xFF1E1E2A).withOpacity(0.85),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.12), width: 1),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withOpacity(0.35),
@@ -1093,12 +1076,8 @@ class _HabitIntensityLogOverlayState extends State<HabitIntensityLogOverlay> {
                       duration: const Duration(milliseconds: 180),
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                       decoration: BoxDecoration(
-                        color: isSelected ? habitColor.withOpacity(0.18) : Colors.transparent,
+                        color: isSelected ? habitColor.withOpacity(0.20) : Colors.transparent,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isSelected ? habitColor.withOpacity(0.42) : Colors.transparent,
-                          width: 1,
-                        ),
                       ),
                       child: Row(
                         children: [
