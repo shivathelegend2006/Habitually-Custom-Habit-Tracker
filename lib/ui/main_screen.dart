@@ -1,26 +1,31 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'habit_intensity_log_overlay.dart';
 
 /// Presentation model for a habit in the tracker.
 class HabitItem {
   final String id;
   String name;
   Color color;
-  int streakCount;
+  int activeDays; // Count of unique days logged
+  int maxStreak; // Longest consecutive streak record
   bool isLoggedToday;
   bool isPaused;
   Map<String, int> loggedDates; // 'YYYY-MM-DD' -> intensity
+  Map<String, String> loggedNotes; // 'YYYY-MM-DD' -> note
 
   HabitItem({
     required this.id,
     required this.name,
     required this.color,
-    required this.streakCount,
+    required this.activeDays,
+    required this.maxStreak,
     required this.isLoggedToday,
     this.isPaused = false,
     required this.loggedDates,
-  });
+    Map<String, String>? loggedNotes,
+  }) : loggedNotes = loggedNotes ?? {};
 }
 
 /// Dynamic theme tokens computed for any habit color (preset or custom picked).
@@ -196,6 +201,9 @@ class _MainScreenState extends State<MainScreen> {
 
   late PageController _pageController;
   int _activeHabitIndex = 0;
+  bool _isIntensityOverlayOpen = false;
+  String _targetLogDateKey = '';
+  String _targetLogDateDisplay = '';
 
   // Active Habit List (Initialized with 3 sample habits in distinct colors)
   late List<HabitItem> _habits;
@@ -212,7 +220,8 @@ class _MainScreenState extends State<MainScreen> {
         id: '1',
         name: 'Chanting',
         color: const Color(0xFFFF7A00),
-        streakCount: 5,
+        activeDays: 13,
+        maxStreak: 5,
         isLoggedToday: false,
         isPaused: false,
         loggedDates: {
@@ -237,7 +246,8 @@ class _MainScreenState extends State<MainScreen> {
         id: '2',
         name: 'Deep Meditation',
         color: const Color(0xFF00D672),
-        streakCount: 14,
+        activeDays: 14,
+        maxStreak: 14,
         isLoggedToday: false,
         isPaused: false,
         loggedDates: {
@@ -263,7 +273,8 @@ class _MainScreenState extends State<MainScreen> {
         id: '3',
         name: 'Cold Shower',
         color: const Color(0xFF0088FF),
-        streakCount: 9,
+        activeDays: 9,
+        maxStreak: 9,
         isLoggedToday: false,
         isPaused: false,
         loggedDates: {
@@ -294,20 +305,86 @@ class _MainScreenState extends State<MainScreen> {
     return '$y-$m-$d';
   }
 
-  void _toggleLogToday(HabitItem habit) {
-    HapticFeedback.mediumImpact();
-    final todayKey = '2026-10-24';
+  static int _calculateMaxStreak(Map<String, int> loggedDates) {
+    if (loggedDates.isEmpty) return 0;
+    final sortedDates = loggedDates.keys
+        .map((k) {
+          try {
+            return DateTime.parse(k);
+          } catch (_) {
+            return null;
+          }
+        })
+        .whereType<DateTime>()
+        .toList()
+      ..sort();
+    if (sortedDates.isEmpty) return 0;
 
-    setState(() {
-      habit.isLoggedToday = !habit.isLoggedToday;
-      if (habit.isLoggedToday) {
-        habit.streakCount += 1;
-        habit.loggedDates[todayKey] = 9;
+    int maxS = 1;
+    int currentS = 1;
+    for (int i = 1; i < sortedDates.length; i++) {
+      final prev = sortedDates[i - 1];
+      final curr = sortedDates[i];
+      final diff = curr.difference(prev).inDays;
+      if (diff == 1) {
+        currentS++;
+        if (currentS > maxS) maxS = currentS;
+      } else if (diff == 0) {
+        continue;
       } else {
-        habit.streakCount = (habit.streakCount - 1).clamp(0, 9999);
-        habit.loggedDates.remove(todayKey);
+        currentS = 1;
       }
+    }
+    return maxS;
+  }
+
+  String _getMonthName(int month) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return months[(month - 1).clamp(0, 11)];
+  }
+
+  String _getDayName(int weekday) {
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return days[(weekday - 1).clamp(0, 6)];
+  }
+
+  DateTime get _currentISTTime {
+    return DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+  }
+
+  String get _currentISTDateKey {
+    final now = _currentISTTime;
+    final y = now.year.toString().padLeft(4, '0');
+    final m = now.month.toString().padLeft(2, '0');
+    final d = now.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  String get _currentISTDateDisplay {
+    final now = _currentISTTime;
+    return '${_getDayName(now.weekday)}, ${now.day} ${_getMonthName(now.month)} ${now.year}';
+  }
+
+  /// Opens the in-tree tactile intensity logging overlay with blurred background and swipeable habit carousel
+  void _openIntensityLogOverlay(int initialIndex, {String? targetDateKey, String? targetDateDisplay}) {
+    if (_habits.isEmpty || initialIndex >= _habits.length) return;
+    HapticFeedback.lightImpact();
+    setState(() {
+      _activeHabitIndex = initialIndex;
+      _targetLogDateKey = targetDateKey ?? _currentISTDateKey;
+      _targetLogDateDisplay = targetDateDisplay ?? _currentISTDateDisplay;
+      _isIntensityOverlayOpen = true;
     });
+  }
+
+  void _closeIntensityLogOverlay() {
+    setState(() {
+      _isIntensityOverlayOpen = false;
+    });
+  }
+
+  void _toggleLogToday(HabitItem habit) {
+    _openIntensityLogOverlay(_activeHabitIndex);
   }
 
   void _deleteHabit(int index) {
@@ -413,6 +490,209 @@ class _MainScreenState extends State<MainScreen> {
                     ),
                   ],
                 ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Sleek, artisanal Habit Options Action Sheet (invoked by '...')
+  void _showHabitOptions(int index, HabitItem habit) {
+    HapticFeedback.lightImpact();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetCtx) {
+        return Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
+              decoration: BoxDecoration(
+                color: const Color(0xFF141417),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: const Color(0xFF26262B), width: 1),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black87,
+                    blurRadius: 36,
+                    offset: Offset(0, 16),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Subtle top drag pill
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF323238),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Habit Title Row with Color Bead
+                  Row(
+                    children: [
+                      Container(
+                        width: 9,
+                        height: 9,
+                        decoration: BoxDecoration(
+                          color: habit.color,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: habit.color.withOpacity(0.4),
+                              blurRadius: 6,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          habit.name,
+                          style: const TextStyle(
+                            fontFamily: '-apple-system',
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.2,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(
+                        '${habit.activeDays}d active',
+                        style: const TextStyle(
+                          fontFamily: '-apple-system',
+                          color: Color(0xFF8E8E93),
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 14),
+                  Container(height: 0.8, color: const Color(0xFF202026)),
+                  const SizedBox(height: 6),
+
+                  // Action: Pause / Resume
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () {
+                        Navigator.of(sheetCtx).pop();
+                        HapticFeedback.mediumImpact();
+                        setState(() {
+                          habit.isPaused = !habit.isPaused;
+                        });
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        child: Row(
+                          children: [
+                            Icon(
+                              habit.isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                              size: 20,
+                              color: habit.isPaused ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    habit.isPaused ? 'Resume Habit' : 'Pause Habit',
+                                    style: const TextStyle(
+                                      fontFamily: '-apple-system',
+                                      color: Color(0xFFEDEDED),
+                                      fontSize: 14.5,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    habit.isPaused
+                                        ? 'Restore active streak tracking'
+                                        : 'Freeze habit without losing streak',
+                                    style: const TextStyle(
+                                      fontFamily: '-apple-system',
+                                      color: Color(0xFF71717A),
+                                      fontSize: 12.0,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // Action: Delete Habit
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () {
+                        Navigator.of(sheetCtx).pop();
+                        _showDeleteConfirmation(index, habit.name);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        child: Row(
+                          children: const [
+                            Icon(
+                              Icons.delete_outline_rounded,
+                              size: 20,
+                              color: Color(0xFFEF4444),
+                            ),
+                            SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Delete Habit',
+                                    style: TextStyle(
+                                      fontFamily: '-apple-system',
+                                      color: Color(0xFFEF4444),
+                                      fontSize: 14.5,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  SizedBox(height: 2),
+                                  Text(
+                                    'Permanently delete habit and history',
+                                    style: TextStyle(
+                                      fontFamily: '-apple-system',
+                                      color: Color(0xFF71717A),
+                                      fontSize: 12.0,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -585,10 +865,10 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   String _getGreetingPrefix() {
-    final hour = DateTime.now().hour;
-    if (hour < 12) {
+    final hour = _currentISTTime.hour;
+    if (hour >= 4 && hour < 12) {
       return 'Good morning,';
-    } else if (hour < 17) {
+    } else if (hour >= 12 && hour < 17) {
       return 'Good afternoon,';
     } else {
       return 'Good evening,';
@@ -1044,7 +1324,8 @@ class _MainScreenState extends State<MainScreen> {
                           id: DateTime.now().millisecondsSinceEpoch.toString(),
                           name: name,
                           color: selectedColor,
-                          streakCount: 0,
+                          activeDays: 0,
+                          maxStreak: 0,
                           isLoggedToday: false,
                           isPaused: false,
                           loggedDates: {},
@@ -1097,13 +1378,13 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  /// Builds the slide-out Side Panel (Drawer) displaying the full list of habits in their colors
+  /// Builds the handcrafted, pure black Side Panel (Drawer) displaying a clean, minimal list of habits
   Widget _buildSidePanel(HabitThemeData currentTheme) {
     return Drawer(
-      backgroundColor: const Color(0xFF141417),
+      backgroundColor: const Color(0xFF000000), // Deep handcrafted pure black
       surfaceTintColor: Colors.transparent,
-      elevation: 24,
-      width: 310,
+      elevation: 0,
+      width: 300,
       child: SafeArea(
         child: Builder(
           builder: (drawerCtx) {
@@ -1116,49 +1397,61 @@ class _MainScreenState extends State<MainScreen> {
             }
 
             return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Header
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Your Habits',
-                            style: TextStyle(
-                              fontFamily: '-apple-system',
-                              color: textPrimary,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.3,
+                  // Clean Handcrafted Masthead
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.baseline,
+                          textBaseline: TextBaseline.alphabetic,
+                          children: [
+                            const Text(
+                              'Habits',
+                              style: TextStyle(
+                                fontFamily: '-apple-system',
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -0.3,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${_habits.length} habits active',
-                            style: const TextStyle(
-                              fontFamily: '-apple-system',
-                              color: textSecondary,
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w500,
+                            const SizedBox(width: 8),
+                            Text(
+                              '${_habits.length}',
+                              style: const TextStyle(
+                                fontFamily: '-apple-system',
+                                color: Color(0xFF6E6E78),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded, color: textSecondary, size: 22),
-                        onPressed: closeDrawer,
-                        splashRadius: 20,
-                      ),
-                    ],
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, color: Color(0xFF8E8E93), size: 19),
+                          onPressed: closeDrawer,
+                          splashRadius: 18,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          tooltip: 'Close',
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 20),
 
-                  // Habit Cards List
+                  const SizedBox(height: 12),
+                  Container(height: 0.5, color: const Color(0xFF1E1E22)),
+                  const SizedBox(height: 8),
+
+                  // Minimal List View (No bulky card boxes)
                   Expanded(
                     child: _habits.isEmpty
                         ? const Center(
@@ -1166,15 +1459,15 @@ class _MainScreenState extends State<MainScreen> {
                               'No habits yet',
                               style: TextStyle(
                                 fontFamily: '-apple-system',
-                                color: textSecondary,
-                                fontSize: 14,
+                                color: Color(0xFF6E6E78),
+                                fontSize: 13.5,
                               ),
                             ),
                           )
                         : ListView.separated(
                             physics: const BouncingScrollPhysics(),
                             itemCount: _habits.length,
-                            separatorBuilder: (context, _) => const SizedBox(height: 10),
+                            separatorBuilder: (context, _) => const SizedBox(height: 4),
                             itemBuilder: (context, index) {
                               final habit = _habits[index];
                               final isCurrent = index == _activeHabitIndex;
@@ -1193,42 +1486,36 @@ class _MainScreenState extends State<MainScreen> {
                                       );
                                     }
                                   },
-                                  borderRadius: BorderRadius.circular(16),
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 200),
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                     decoration: BoxDecoration(
-                                      color: isCurrent
-                                          ? const Color(0xFF222228)
-                                          : const Color(0xFF1A1A1E),
-                                      borderRadius: BorderRadius.circular(16),
-                                      border: Border.all(
-                                        color: isCurrent
-                                            ? habit.color.withOpacity(0.55)
-                                            : Colors.white.withOpacity(0.06),
-                                        width: 1.2,
-                                      ),
+                                      color: isCurrent ? const Color(0xFF121216) : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(8),
                                     ),
                                     child: Row(
                                       children: [
-                                        // Color Pill
+                                        // Artisanal Circular Pigment Bead (Replacing generic vertical AI bar)
                                         Container(
-                                          width: 10,
-                                          height: 38,
+                                          width: 8,
+                                          height: 8,
                                           decoration: BoxDecoration(
-                                            color: habit.color,
-                                            borderRadius: BorderRadius.circular(5),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: habit.color.withOpacity(0.4),
-                                                blurRadius: 8,
-                                              ),
-                                            ],
+                                            color: isCurrent ? habit.color : habit.color.withOpacity(0.75),
+                                            shape: BoxShape.circle,
+                                            boxShadow: isCurrent
+                                                ? [
+                                                    BoxShadow(
+                                                      color: habit.color.withOpacity(0.45),
+                                                      blurRadius: 6,
+                                                      spreadRadius: 0.5,
+                                                    ),
+                                                  ]
+                                                : null,
                                           ),
                                         ),
                                         const SizedBox(width: 12),
 
-                                        // Name & Streak
+                                        // Habit Name & Metadata (Active Days & Best Streak)
                                         Expanded(
                                           child: Column(
                                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1238,11 +1525,11 @@ class _MainScreenState extends State<MainScreen> {
                                                   Flexible(
                                                     child: Text(
                                                       habit.name,
-                                                      style: const TextStyle(
+                                                      style: TextStyle(
                                                         fontFamily: '-apple-system',
-                                                        color: textPrimary,
-                                                        fontSize: 15.0,
-                                                        fontWeight: FontWeight.w700,
+                                                        color: isCurrent ? Colors.white : const Color(0xFFD4D4D8),
+                                                        fontSize: 14.5,
+                                                        fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w400,
                                                         letterSpacing: -0.2,
                                                       ),
                                                       overflow: TextOverflow.ellipsis,
@@ -1250,67 +1537,72 @@ class _MainScreenState extends State<MainScreen> {
                                                   ),
                                                   if (habit.isPaused) ...[
                                                     const SizedBox(width: 6),
-                                                    Container(
-                                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                                      decoration: BoxDecoration(
-                                                        color: const Color(0xFF332008),
-                                                        borderRadius: BorderRadius.circular(6),
-                                                        border: Border.all(
-                                                          color: const Color(0xFFD97706).withOpacity(0.5),
-                                                          width: 0.8,
-                                                        ),
-                                                      ),
-                                                      child: const Text(
-                                                        'Paused',
-                                                        style: TextStyle(
-                                                          fontFamily: '-apple-system',
-                                                          color: Color(0xFFF59E0B),
-                                                          fontSize: 10,
-                                                          fontWeight: FontWeight.w700,
-                                                        ),
+                                                    const Text(
+                                                      'paused',
+                                                      style: TextStyle(
+                                                        fontFamily: '-apple-system',
+                                                        color: Color(0xFFD97706),
+                                                        fontSize: 10.5,
+                                                        fontStyle: FontStyle.italic,
+                                                        fontWeight: FontWeight.w500,
                                                       ),
                                                     ),
                                                   ],
                                                 ],
                                               ),
-                                              const SizedBox(height: 3),
-                                              Text(
-                                                '${habit.streakCount} day streak',
-                                                style: TextStyle(
-                                                  fontFamily: '-apple-system',
-                                                  color: habit.color,
-                                                  fontSize: 12.5,
-                                                  fontWeight: FontWeight.w600,
+                                              const SizedBox(height: 2.5),
+                                              Text.rich(
+                                                TextSpan(
+                                                  children: [
+                                                    TextSpan(
+                                                      text: "${habit.activeDays}",
+                                                      style: TextStyle(
+                                                        fontFamily: '-apple-system',
+                                                        color: habit.color,
+                                                        fontSize: 12.0,
+                                                        fontWeight: FontWeight.w700,
+                                                        fontFeatures: const [FontFeature.tabularFigures()],
+                                                      ),
+                                                    ),
+                                                    TextSpan(
+                                                      text: " active ${habit.activeDays == 1 ? 'day' : 'days'} · best ",
+                                                      style: const TextStyle(
+                                                        fontFamily: '-apple-system',
+                                                        color: Color(0xFF71717A),
+                                                        fontSize: 12.0,
+                                                        fontWeight: FontWeight.w400,
+                                                      ),
+                                                    ),
+                                                    TextSpan(
+                                                      text: "${habit.maxStreak}d",
+                                                      style: TextStyle(
+                                                        fontFamily: '-apple-system',
+                                                        color: habit.color,
+                                                        fontSize: 12.0,
+                                                        fontWeight: FontWeight.w700,
+                                                        fontFeatures: const [FontFeature.tabularFigures()],
+                                                      ),
+                                                    ),
+                                                  ],
                                                 ),
                                               ),
                                             ],
                                           ),
                                         ),
 
-                                        // Delete action button
+                                        // Handcrafted borderless three dots (...) options trigger
                                         IconButton(
-                                          icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFF5E5E68), size: 18),
-                                          tooltip: 'Delete habit',
-                                          splashRadius: 18,
-                                          onPressed: () => _showDeleteConfirmation(index, habit.name),
-                                        ),
-
-                                        // Active Indicator Dot
-                                        if (isCurrent)
-                                          Container(
-                                            width: 7,
-                                            height: 7,
-                                            decoration: BoxDecoration(
-                                              color: habit.color,
-                                              shape: BoxShape.circle,
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: habit.color.withOpacity(0.6),
-                                                  blurRadius: 6,
-                                                ),
-                                              ],
-                                            ),
+                                          icon: const Icon(
+                                            Icons.more_horiz_rounded,
+                                            color: Color(0xFF5E5E68),
+                                            size: 19,
                                           ),
+                                          tooltip: 'Options',
+                                          splashRadius: 16,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                          onPressed: () => _showHabitOptions(index, habit),
+                                        ),
                                       ],
                                     ),
                                   ),
@@ -1320,35 +1612,38 @@ class _MainScreenState extends State<MainScreen> {
                           ),
                   ),
 
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
+                  Container(height: 0.5, color: const Color(0xFF1E1E22)),
+                  const SizedBox(height: 8),
 
-                  // '+ Add New Habit' Button
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      closeDrawer();
-                      _showAddHabitSheet();
-                    },
-                    icon: const Icon(Icons.add_rounded, size: 20),
-                    label: const Text(
-                      'Add New Habit',
-                      style: TextStyle(
-                        fontFamily: '-apple-system',
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF222228),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                        side: BorderSide(
-                          color: Colors.white.withOpacity(0.12),
-                          width: 1,
+                  // Handcrafted '+ New Habit' Row
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        closeDrawer();
+                        _showAddHabitSheet();
+                      },
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                        child: Row(
+                          children: const [
+                            Icon(Icons.add_rounded, size: 19, color: Color(0xFFA1A1AA)),
+                            SizedBox(width: 10),
+                            Text(
+                              'New Habit',
+                              style: TextStyle(
+                                fontFamily: '-apple-system',
+                                color: Color(0xFFA1A1AA),
+                                fontSize: 14.0,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: -0.1,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      elevation: 0,
                     ),
                   ),
                 ],
@@ -1553,14 +1848,15 @@ class _MainScreenState extends State<MainScreen> {
                       const SizedBox(height: 10),
 
                       // -------------------------------------------------------
-                      // PINNED HEADER: [Two-Line Menu Icon] + Brand & Greeting + [+]
+                      // PINNED HEADER: [Menu] Habitually... ───────────── [+]
+                      //                       Good evening, Legend!
                       // -------------------------------------------------------
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Borderless, Circle-less, Box-less Two-Line Menu Icon (blends seamlessly into bg)
+                          // Left: Minimalist Two-Line Menu Icon (Cap-height aligned)
                           Padding(
-                            padding: const EdgeInsets.only(top: 0.0, right: 10.0),
+                            padding: const EdgeInsets.only(top: 4.0, right: 14.0),
                             child: Builder(
                               builder: (menuCtx) {
                                 return GestureDetector(
@@ -1574,8 +1870,8 @@ class _MainScreenState extends State<MainScreen> {
                                   },
                                   behavior: HitTestBehavior.opaque,
                                   child: Container(
-                                    width: 38,
-                                    height: 38,
+                                    width: 28,
+                                    height: 24,
                                     alignment: Alignment.centerLeft,
                                     color: Colors.transparent,
                                     child: Column(
@@ -1609,18 +1905,20 @@ class _MainScreenState extends State<MainScreen> {
                             ),
                           ),
 
-                          // Brand & Greeting Column (Aligned directly beside the two lines)
+                          // Left-aligned: Refined Brand & Greeting Column
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
                               children: [
                                 RichText(
                                   text: TextSpan(
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontFamily: '-apple-system',
-                                      fontSize: 22,
+                                      fontSize: 21.0,
                                       fontWeight: FontWeight.w800,
-                                      letterSpacing: -0.4,
+                                      letterSpacing: -0.5,
+                                      height: 1.15,
                                     ),
                                     children: [
                                       const TextSpan(
@@ -1634,28 +1932,28 @@ class _MainScreenState extends State<MainScreen> {
                                     ],
                                   ),
                                 ),
-                                const SizedBox(height: 8), // Shifted down a small unit
+                                const SizedBox(height: 3.5),
                                 RichText(
                                   text: TextSpan(
                                     style: const TextStyle(
                                       fontFamily: '-apple-system',
-                                      letterSpacing: -0.2,
+                                      fontSize: 13.5,
+                                      height: 1.2,
+                                      letterSpacing: -0.1,
                                     ),
                                     children: [
                                       TextSpan(
                                         text: '${_getGreetingPrefix()} ',
                                         style: const TextStyle(
                                           color: textSecondary,
-                                          fontSize: 14.0,
-                                          fontWeight: FontWeight.w500,
+                                          fontWeight: FontWeight.w400,
                                         ),
                                       ),
                                       const TextSpan(
-                                        text: 'Legend!',
+                                        text: 'Legend',
                                         style: TextStyle(
                                           color: textPrimary,
-                                          fontSize: 17.5,
-                                          fontWeight: FontWeight.w800,
+                                          fontWeight: FontWeight.w700,
                                         ),
                                       ),
                                     ],
@@ -1665,27 +1963,25 @@ class _MainScreenState extends State<MainScreen> {
                             ),
                           ),
 
-                          // Top-Right '+' Action Button
-                          Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              onTap: _showAddHabitSheet,
-                              borderRadius: BorderRadius.circular(20),
-                              child: Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF222226).withOpacity(0.8),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.white.withOpacity(0.12),
-                                    width: 1.2,
+                          // Right: Minimalist, Borderless, Box-less '+' Action Button (blends into bg)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 0.0),
+                            child: SizedBox(
+                              width: 36,
+                              height: 36,
+                              child: GestureDetector(
+                                onTap: () {
+                                  HapticFeedback.lightImpact();
+                                  _showAddHabitSheet();
+                                },
+                                behavior: HitTestBehavior.opaque,
+                                child: const Align(
+                                  alignment: Alignment.topRight,
+                                  child: Icon(
+                                    Icons.add_rounded,
+                                    color: Colors.white,
+                                    size: 26,
                                   ),
-                                ),
-                                child: const Icon(
-                                  Icons.add_rounded,
-                                  color: Colors.white,
-                                  size: 22,
                                 ),
                               ),
                             ),
@@ -1707,6 +2003,61 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ),
           ),
+
+          // ===================================================================
+          // 3. IN-TREE INTENSITY LOGGING OVERLAY (Authentic Web Blur & Living Liquid Glass)
+          // ===================================================================
+          if (_isIntensityOverlayOpen)
+            Positioned.fill(
+              child: PopScope(
+                canPop: false,
+                onPopInvokedWithResult: (didPop, result) {
+                  if (!didPop) _closeIntensityLogOverlay();
+                },
+                child: HabitIntensityLogOverlay(
+                  habits: _habits,
+                  initialIndex: _activeHabitIndex,
+                  targetDateKey: _targetLogDateKey,
+                  targetDateDisplay: _targetLogDateDisplay,
+                  onClose: _closeIntensityLogOverlay,
+                  onHabitSwiped: (newIndex) {
+                    setState(() {
+                      _activeHabitIndex = newIndex;
+                    });
+                    if (_pageController.hasClients) {
+                      _pageController.jumpToPage(newIndex);
+                    }
+                  },
+                  onLogSaved: (habit, intensity, note, dateKey) {
+                    setState(() {
+                      if (dateKey == _currentISTDateKey) {
+                        habit.isLoggedToday = true;
+                      }
+                      habit.loggedDates[dateKey] = intensity;
+                      if (note != null && note.isNotEmpty) {
+                        habit.loggedNotes[dateKey] = note;
+                      }
+                      habit.activeDays = habit.loggedDates.length;
+                      final currentMax = _calculateMaxStreak(habit.loggedDates);
+                      if (currentMax > habit.maxStreak) {
+                        habit.maxStreak = currentMax;
+                      }
+                    });
+                  },
+                  onLogRemoved: (habit, dateKey) {
+                    setState(() {
+                      habit.loggedDates.remove(dateKey);
+                      habit.loggedNotes.remove(dateKey);
+                      if (dateKey == _currentISTDateKey) {
+                        habit.isLoggedToday = false;
+                      }
+                      habit.activeDays = habit.loggedDates.length;
+                      habit.maxStreak = _calculateMaxStreak(habit.loggedDates);
+                    });
+                  },
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1947,55 +2298,47 @@ class _MainScreenState extends State<MainScreen> {
                   ),
                   const SizedBox(width: 8),
 
-                  // Three Dots (...) Menu Action Button
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => _showPausePrompt(habit),
-                      borderRadius: BorderRadius.circular(16),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3.5),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF222226).withOpacity(0.8),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.08),
-                            width: 1,
+                  // Three Dots (...) Menu Action Button - Minimalist & Borderless
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      _showHabitOptions(_activeHabitIndex, habit);
+                    },
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.more_horiz_rounded,
+                            color: textSecondary,
+                            size: 21,
                           ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.more_horiz_rounded,
-                              color: textSecondary,
-                              size: 18,
-                            ),
-                            if (habit.isPaused) ...[
-                              const SizedBox(width: 4),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF332008),
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(
-                                    color: const Color(0xFFD97706).withOpacity(0.5),
-                                    width: 0.8,
-                                  ),
-                                ),
-                                child: const Text(
-                                  'Paused',
-                                  style: TextStyle(
-                                    fontFamily: '-apple-system',
-                                    color: Color(0xFFF59E0B),
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                          if (habit.isPaused) ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF332008),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: const Color(0xFFD97706).withOpacity(0.5),
+                                  width: 0.8,
                                 ),
                               ),
-                            ],
+                              child: const Text(
+                                'Paused',
+                                style: TextStyle(
+                                  fontFamily: '-apple-system',
+                                  color: Color(0xFFF59E0B),
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
                           ],
-                        ),
+                        ],
                       ),
                     ),
                   ),
@@ -2003,9 +2346,9 @@ class _MainScreenState extends State<MainScreen> {
               ),
               const SizedBox(height: 2),
 
-              // Centered Hero Number (NO cheap emojis)
+              // Centered Hero Number: Active Days (accumulated consistency, not streak penalty)
               Text(
-                '${habit.streakCount}',
+                '${habit.activeDays}',
                 style: TextStyle(
                   fontFamily: '-apple-system',
                   color: habit.isPaused ? habit.color.withOpacity(0.55) : habit.color,
@@ -2017,15 +2360,52 @@ class _MainScreenState extends State<MainScreen> {
               ),
               const SizedBox(height: 2),
 
-              // Understated Label (Mixed Case 'Day Streak', NOT all caps)
+              // Primary Label: Active Days
               const Text(
-                'Day Streak',
+                'Active Days',
                 style: TextStyle(
                   fontFamily: '-apple-system',
                   color: textBrightened,
                   fontSize: 13.0,
                   fontWeight: FontWeight.w600,
                   letterSpacing: 0.2,
+                ),
+              ),
+              const SizedBox(height: 4),
+
+              // Small, Refined Longest Streak Metric (Streak count number matches hero color)
+              Text.rich(
+                TextSpan(
+                  text: 'Longest streak · ',
+                  style: const TextStyle(
+                    fontFamily: '-apple-system',
+                    color: textSecondary,
+                    fontSize: 12.0,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 0.1,
+                  ),
+                  children: [
+                    TextSpan(
+                      text: '${habit.maxStreak}',
+                      style: TextStyle(
+                        fontFamily: '-apple-system',
+                        color: habit.color,
+                        fontSize: 12.0,
+                        fontWeight: FontWeight.w700,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    TextSpan(
+                      text: ' ${habit.maxStreak == 1 ? 'day' : 'days'}',
+                      style: const TextStyle(
+                        fontFamily: '-apple-system',
+                        color: textSecondary,
+                        fontSize: 12.0,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.1,
+                      ),
+                    ),
+                  ],
                 ),
               ),
 
@@ -2217,24 +2597,43 @@ class _MainScreenState extends State<MainScreen> {
               final cellDate = DateTime(monthDate.year, monthDate.month, dayNumber);
               final cellKey = _formatDateKey(cellDate);
               final intensity = habit.loggedDates[cellKey];
-              final isToday = cellKey == '2026-10-24';
+              final isToday = cellKey == _currentISTDateKey;
 
               Color bgColor = cellInactive; // Inactive date cells #17171A (darker)
               Color textColor = textSecondary; // Inactive date numbers #8E8E93
 
               if (intensity != null) {
-                bgColor = habit.color; // Dynamic habit accent
+                final clampedIntensity = intensity > 5 ? (intensity / 2).round().clamp(1, 5) : intensity.clamp(1, 5);
+                final double opacity = switch (clampedIntensity) {
+                  5 => 1.00,
+                  4 => 0.85,
+                  3 => 0.70,
+                  2 => 0.52,
+                  _ => 0.38,
+                };
+                bgColor = habit.color.withOpacity(opacity);
                 textColor = Colors.white; // White text on completed dates
               }
 
               return Expanded(
-                child: _buildFlatCell(
-                  day: dayNumber,
-                  bgColor: bgColor,
-                  textColor: textColor,
-                  habitColor: habit.color,
-                  isLogged: intensity != null,
-                  isToday: isToday,
+                child: GestureDetector(
+                  onTap: () {
+                    HapticFeedback.lightImpact();
+                    _openIntensityLogOverlay(
+                      _activeHabitIndex,
+                      targetDateKey: cellKey,
+                      targetDateDisplay: '${_getDayName(cellDate.weekday)}, $dayNumber ${_getMonthName(cellDate.month)} ${cellDate.year}',
+                    );
+                  },
+                  behavior: HitTestBehavior.opaque,
+                  child: _buildFlatCell(
+                    day: dayNumber,
+                    bgColor: bgColor,
+                    textColor: textColor,
+                    habitColor: habit.color,
+                    isLogged: intensity != null,
+                    isToday: isToday,
+                  ),
                 ),
               );
             }),

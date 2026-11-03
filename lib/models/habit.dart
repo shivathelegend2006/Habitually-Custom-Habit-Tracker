@@ -4,6 +4,8 @@ class Habit {
   final String colorCode;
   final bool isArchived;
   final DateTime createdAt;
+  final int maxStreak;
+  final int activeDays;
 
   const Habit({
     this.id,
@@ -11,6 +13,8 @@ class Habit {
     required this.colorCode,
     this.isArchived = false,
     required this.createdAt,
+    this.maxStreak = 0,
+    this.activeDays = 0,
   });
 
   /// Creates a copy of this habit with specified attributes updated.
@@ -20,6 +24,8 @@ class Habit {
     String? colorCode,
     bool? isArchived,
     DateTime? createdAt,
+    int? maxStreak,
+    int? activeDays,
   }) {
     return Habit(
       id: id ?? this.id,
@@ -27,6 +33,8 @@ class Habit {
       colorCode: colorCode ?? this.colorCode,
       isArchived: isArchived ?? this.isArchived,
       createdAt: createdAt ?? this.createdAt,
+      maxStreak: maxStreak ?? this.maxStreak,
+      activeDays: activeDays ?? this.activeDays,
     );
   }
 
@@ -37,6 +45,8 @@ class Habit {
       'color_code': colorCode,
       'is_archived': isArchived ? 1 : 0,
       'created_at': createdAt.toIso8601String(),
+      'max_streak': maxStreak,
+      'active_days': activeDays,
     };
     if (id != null) {
       map['id'] = id;
@@ -52,6 +62,8 @@ class Habit {
       colorCode: map['color_code'] as String,
       isArchived: (map['is_archived'] as int) == 1,
       createdAt: DateTime.parse(map['created_at'] as String),
+      maxStreak: (map['max_streak'] as int?) ?? 0,
+      activeDays: (map['active_days'] as int?) ?? 0,
     );
   }
 }

@@ -48,7 +48,9 @@ class DatabaseHelper {
         name TEXT NOT NULL,
         color_code TEXT NOT NULL,
         is_archived INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        max_streak INTEGER NOT NULL DEFAULT 0,
+        active_days INTEGER NOT NULL DEFAULT 0
       );
     ''');
 
