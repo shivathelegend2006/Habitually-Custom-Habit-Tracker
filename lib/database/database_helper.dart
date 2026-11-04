@@ -222,6 +222,18 @@ class DatabaseHelper {
     return result.map((map) => DailyLog.fromMap(map)).toList();
   }
 
+  /// Completely wipes all data from both habits and daily_logs tables.
+  Future<void> clearAllData() async {
+    final db = await database;
+    await db.delete(tableDailyLogs);
+    await db.delete(tableHabits);
+  }
+
+  /// Legacy mock purge (deprecated no-op so user habits are never purged).
+  Future<void> purgeLegacyMockData() async {
+    // No-op: Preserve all user habits and logs regardless of their names.
+  }
+
   /// Closes the database instance.
   Future<void> close() async {
     final db = await database;

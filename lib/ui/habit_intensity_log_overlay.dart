@@ -1198,8 +1198,19 @@ class _HabitIntensityLogOverlayState extends State<HabitIntensityLogOverlay> {
                   ),
                 ),
                 TextSpan(
-                  text: ' Active ${habit.activeDays == 1 ? 'Day' : 'Days'} · Best ',
+                  text: ' Active ${habit.activeDays == 1 ? 'Day' : 'Days'} · Streak ',
                   style: const TextStyle(color: Color(0xFF8E8E93)),
+                ),
+                TextSpan(
+                  text: '${habit.currentStreak}d',
+                  style: TextStyle(
+                    color: habit.currentStreak > 0 ? habit.color : const Color(0xFF8E8E93),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const TextSpan(
+                  text: ' · Best ',
+                  style: TextStyle(color: Color(0xFF8E8E93)),
                 ),
                 TextSpan(
                   text: '${habit.maxStreak}d',

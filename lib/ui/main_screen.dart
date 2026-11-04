@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../database/database_helper.dart';
 import '../models/habit.dart';
 import '../models/daily_log.dart';
+import '../database/data_transfer_service.dart';
 import 'habit_intensity_log_overlay.dart';
 
 /// Presentation model for a habit in the tracker.
@@ -12,6 +13,7 @@ class HabitItem {
   String name;
   Color color;
   int activeDays; // Count of unique days logged
+  int currentStreak; // Living consecutive streak
   int maxStreak; // Longest consecutive streak record
   bool isLoggedToday;
   bool isPaused;
@@ -23,6 +25,7 @@ class HabitItem {
     required this.name,
     required this.color,
     required this.activeDays,
+    this.currentStreak = 0,
     required this.maxStreak,
     required this.isLoggedToday,
     this.isPaused = false,
@@ -220,14 +223,14 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   static String _colorToHex(Color color) {
-    return '#';
+    return '#${color.value.toRadixString(16).padLeft(8, '0').toUpperCase()}';
   }
 
   static Color _parseColorFromHex(String hex) {
     try {
       final clean = hex.replaceAll('#', '').replaceAll('0x', '');
       if (clean.length == 6) {
-        return Color(int.parse('FF', radix: 16));
+        return Color(int.parse('FF$clean', radix: 16));
       } else if (clean.length == 8) {
         return Color(int.parse(clean, radix: 16));
       }
@@ -238,14 +241,8 @@ class _MainScreenState extends State<MainScreen> {
   Future<void> _initDatabaseAndLoadHabits() async {
     try {
       final db = DatabaseHelper.instance;
-      List<Habit> dbHabits = await db.fetchActiveHabits();
 
-      // If database is empty (first app launch), seed with the 3 default habits & logs
-      if (dbHabits.isEmpty) {
-        await _seedInitialHabits();
-        dbHabits = await db.fetchActiveHabits();
-      }
-
+      final List<Habit> dbHabits = await db.fetchActiveHabits();
       final List<HabitItem> loadedHabits = [];
       final todayKey = _currentISTDateKey;
 
@@ -262,9 +259,19 @@ class _MainScreenState extends State<MainScreen> {
           }
         }
 
-        final isLoggedToday = dates.containsKey(todayKey);
-        final activeDays = h.activeDays > 0 ? h.activeDays : dates.length;
-        final maxStreak = h.maxStreak > 0 ? h.maxStreak : _calculateMaxStreak(dates);
+        final isLoggedToday = dates.containsKey(todayKey) && (dates[todayKey] ?? 0) > 0;
+        final activeDays = _calculateActiveDays(dates);
+        final currentStreak = _calculateCurrentStreak(dates, _currentISTTime);
+        final maxStreak = _calculateMaxStreak(dates);
+
+        // Keep habits table in sync with real log calculations
+        if (activeDays != h.activeDays || maxStreak != h.maxStreak) {
+          await db.updateHabitStats(
+            habitId: h.id!,
+            activeDays: activeDays,
+            maxStreak: maxStreak,
+          );
+        }
 
         loadedHabits.add(
           HabitItem(
@@ -272,6 +279,7 @@ class _MainScreenState extends State<MainScreen> {
             name: h.name,
             color: _parseColorFromHex(h.colorCode),
             activeDays: activeDays,
+            currentStreak: currentStreak,
             maxStreak: maxStreak,
             isLoggedToday: isLoggedToday,
             isPaused: h.isPaused,
@@ -291,75 +299,12 @@ class _MainScreenState extends State<MainScreen> {
         });
       }
     } catch (e) {
-      debugPrint('Error loading habits from database: ');
+      debugPrint('Error loading habits from database: $e');
       if (mounted) {
         setState(() {
           _isLoadingHabits = false;
         });
       }
-    }
-  }
-
-  Future<void> _seedInitialHabits() async {
-    final db = DatabaseHelper.instance;
-
-    // 1. Chanting (Solar Orange: #FFFF7A00)
-    final h1 = Habit(
-      name: 'Chanting',
-      colorCode: '#FFFF7A00',
-      activeDays: 13,
-      maxStreak: 5,
-      isPaused: false,
-      createdAt: DateTime.now().subtract(const Duration(days: 35)),
-    );
-    final id1 = await db.insertHabit(h1);
-    final h1Logs = {
-      '2026-10-03': 9, '2026-10-04': 9, '2026-10-06': 9, '2026-10-08': 6,
-      '2026-10-10': 8, '2026-10-14': 9, '2026-10-15': 7, '2026-10-17': 8,
-      '2026-10-20': 9, '2026-10-23': 8, '2026-10-27': 9, '2026-10-30': 8,
-      '2026-10-31': 10,
-    };
-    for (final entry in h1Logs.entries) {
-      await db.insertLog(DailyLog(habitId: id1, logDate: entry.key, intensity: entry.value));
-    }
-
-    // 2. Deep Meditation (Emerald Mint: #FF00D672)
-    final h2 = Habit(
-      name: 'Deep Meditation',
-      colorCode: '#FF00D672',
-      activeDays: 14,
-      maxStreak: 14,
-      isPaused: false,
-      createdAt: DateTime.now().subtract(const Duration(days: 35)),
-    );
-    final id2 = await db.insertHabit(h2);
-    final h2Logs = {
-      '2026-10-11': 9, '2026-10-12': 8, '2026-10-13': 9, '2026-10-14': 8,
-      '2026-10-15': 9, '2026-10-16': 9, '2026-10-17': 7, '2026-10-18': 8,
-      '2026-10-19': 9, '2026-10-20': 9, '2026-10-21': 8, '2026-10-22': 9,
-      '2026-10-23': 9, '2026-10-24': 10,
-    };
-    for (final entry in h2Logs.entries) {
-      await db.insertLog(DailyLog(habitId: id2, logDate: entry.key, intensity: entry.value));
-    }
-
-    // 3. Cold Shower (Electric Blue: #FF0088FF)
-    final h3 = Habit(
-      name: 'Cold Shower',
-      colorCode: '#FF0088FF',
-      activeDays: 9,
-      maxStreak: 9,
-      isPaused: false,
-      createdAt: DateTime.now().subtract(const Duration(days: 35)),
-    );
-    final id3 = await db.insertHabit(h3);
-    final h3Logs = {
-      '2026-10-16': 8, '2026-10-17': 9, '2026-10-18': 8, '2026-10-19': 9,
-      '2026-10-20': 8, '2026-10-21': 9, '2026-10-22': 7, '2026-10-23': 9,
-      '2026-10-24': 9,
-    };
-    for (final entry in h3Logs.entries) {
-      await db.insertLog(DailyLog(habitId: id3, logDate: entry.key, intensity: entry.value));
     }
   }
 
@@ -376,12 +321,16 @@ class _MainScreenState extends State<MainScreen> {
     return '$y-$m-$d';
   }
 
+  static int _calculateActiveDays(Map<String, int> loggedDates) {
+    return loggedDates.values.where((v) => v > 0).length;
+  }
+
   static int _calculateMaxStreak(Map<String, int> loggedDates) {
-    if (loggedDates.isEmpty) return 0;
-    final sortedDates = loggedDates.keys
-        .map((k) {
+    final validDates = loggedDates.entries
+        .where((e) => e.value > 0)
+        .map((e) {
           try {
-            return DateTime.parse(k);
+            return DateTime.parse(e.key);
           } catch (_) {
             return null;
           }
@@ -389,13 +338,14 @@ class _MainScreenState extends State<MainScreen> {
         .whereType<DateTime>()
         .toList()
       ..sort();
-    if (sortedDates.isEmpty) return 0;
+
+    if (validDates.isEmpty) return 0;
 
     int maxS = 1;
     int currentS = 1;
-    for (int i = 1; i < sortedDates.length; i++) {
-      final prev = sortedDates[i - 1];
-      final curr = sortedDates[i];
+    for (int i = 1; i < validDates.length; i++) {
+      final prev = DateTime.utc(validDates[i - 1].year, validDates[i - 1].month, validDates[i - 1].day);
+      final curr = DateTime.utc(validDates[i].year, validDates[i].month, validDates[i].day);
       final diff = curr.difference(prev).inDays;
       if (diff == 1) {
         currentS++;
@@ -409,9 +359,96 @@ class _MainScreenState extends State<MainScreen> {
     return maxS;
   }
 
+  static int _calculateCurrentStreak(Map<String, int> loggedDates, DateTime now) {
+    final validDates = loggedDates.entries
+        .where((e) => e.value > 0)
+        .map((e) {
+          try {
+            return DateTime.parse(e.key);
+          } catch (_) {
+            return null;
+          }
+        })
+        .whereType<DateTime>()
+        .toList()
+      ..sort();
+
+    if (validDates.isEmpty) return 0;
+
+    final latest = validDates.last;
+    final latestDay = DateTime.utc(latest.year, latest.month, latest.day);
+    final validDateSet = validDates.map((d) {
+      final y = d.year.toString().padLeft(4, '0');
+      final m = d.month.toString().padLeft(2, '0');
+      final day = d.day.toString().padLeft(2, '0');
+      return '$y-$m-$day';
+    }).toSet();
+
+    int streak = 1;
+    DateTime cursor = latestDay.subtract(const Duration(days: 1));
+
+    while (true) {
+      final y = cursor.year.toString().padLeft(4, '0');
+      final m = cursor.month.toString().padLeft(2, '0');
+      final day = cursor.day.toString().padLeft(2, '0');
+      final key = '$y-$m-$day';
+      if (validDateSet.contains(key)) {
+        streak++;
+        cursor = cursor.subtract(const Duration(days: 1));
+      } else {
+        break;
+      }
+    }
+
+    return streak;
+  }
+
   String _getMonthName(int month) {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return months[(month - 1).clamp(0, 11)];
+  }
+
+  String _getFullMonthName(int month) {
+    const fullMonths = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    return fullMonths[(month - 1).clamp(0, 11)];
+  }
+
+  /// Calculates the dynamic list of months to render for a habit.
+  /// Traverses from the earliest recorded log (e.g. July or earlier)
+  /// through to next month (or latest log).
+  List<DateTime> _getMonthsForHabit(HabitItem habit) {
+    final now = _currentISTTime;
+    DateTime startMonth = DateTime(now.year, now.month - 3, 1);
+    DateTime endMonth = DateTime(now.year, now.month + 1, 1);
+
+    if (habit.loggedDates.isNotEmpty) {
+      for (final dateKey in habit.loggedDates.keys) {
+        final parsed = DateTime.tryParse(dateKey);
+        if (parsed != null) {
+          final monthStart = DateTime(parsed.year, parsed.month, 1);
+          if (monthStart.isBefore(startMonth)) {
+            startMonth = monthStart;
+          }
+          if (monthStart.isAfter(endMonth)) {
+            endMonth = monthStart;
+          }
+        }
+      }
+    }
+
+    final List<DateTime> months = [];
+    var cursor = DateTime(startMonth.year, startMonth.month, 1);
+    final limit = DateTime(endMonth.year, endMonth.month, 1);
+
+    while (!cursor.isAfter(limit)) {
+      months.add(cursor);
+      cursor = DateTime(cursor.year, cursor.month + 1, 1);
+    }
+
+    return months;
   }
 
   String _getDayName(int weekday) {
@@ -1475,6 +1512,549 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  /// Displays the handcrafted modal sheet for exporting or restoring data
+  void _showBackupRestoreSheet() {
+    HapticFeedback.lightImpact();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetCtx) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFF161619),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Top drag indicator
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF38383E),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+
+              // Title & Subtitle
+              const Text(
+                'Backup & Restore',
+                style: TextStyle(
+                  fontFamily: '-apple-system',
+                  color: Colors.white,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Inject pre-set rituals or export your streak progress',
+                style: TextStyle(
+                  fontFamily: '-apple-system',
+                  color: Color(0xFF8E8E93),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+              const SizedBox(height: 22),
+
+              // Option 1: Paste & Inject from Clipboard
+              Material(
+                color: const Color(0xFF202025),
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () async {
+                    HapticFeedback.lightImpact();
+                    final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+                    final text = clipboardData?.text?.trim() ?? '';
+
+                    if (text.isEmpty) {
+                      if (sheetCtx.mounted) {
+                        Navigator.of(sheetCtx).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Clipboard is empty! Copy your JSON data first.'),
+                            backgroundColor: Color(0xFF26262B),
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
+                      }
+                      return;
+                    }
+
+                    // Prompt confirmation
+                    if (sheetCtx.mounted) {
+                      showDialog(
+                        context: context,
+                        barrierColor: Colors.black.withOpacity(0.65),
+                        builder: (dialogCtx) => Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 320),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: Container(
+                                padding: const EdgeInsets.all(22),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1E1E24),
+                                  borderRadius: BorderRadius.circular(22),
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      'Inject Rituals',
+                                      style: TextStyle(
+                                        fontFamily: '-apple-system',
+                                        color: Colors.white,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    const Text(
+                                      'How would you like to import this data?',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        fontFamily: '-apple-system',
+                                        color: Color(0xFF8E8E93),
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 20),
+                                    // Merge Button (Border-Free Emerald Pill)
+                                    SizedBox(
+                                      width: double.infinity,
+                                      height: 48,
+                                      child: ElevatedButton(
+                                        onPressed: () async {
+                                          Navigator.of(dialogCtx).pop();
+                                          Navigator.of(sheetCtx).pop();
+
+                                          final result = await DataTransferService.importFromJson(
+                                            text,
+                                            wipeExisting: false,
+                                          );
+
+                                          if (result.success) {
+                                            HapticFeedback.mediumImpact();
+                                            await _initDatabaseAndLoadHabits();
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Merged  habits and  logs!',
+                                                  ),
+                                                  backgroundColor: const Color(0xFF00D672),
+                                                  duration: const Duration(seconds: 3),
+                                                ),
+                                              );
+                                            }
+                                          } else {
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(result.errorMessage ?? 'Import failed'),
+                                                  backgroundColor: const Color(0xFFEF4444),
+                                                  duration: const Duration(seconds: 4),
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        },
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(0xFF00D672),
+                                          foregroundColor: const Color(0xFF0A1F13),
+                                          elevation: 0,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(14),
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: const [
+                                            Icon(Icons.call_merge_rounded, size: 18),
+                                            SizedBox(width: 8),
+                                            Text(
+                                              'Merge with Existing',
+                                              style: TextStyle(
+                                                fontFamily: '-apple-system',
+                                                fontSize: 14.5,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    // Replace All Button (Border-Free Amber Capsule)
+                                    SizedBox(
+                                      width: double.infinity,
+                                      height: 48,
+                                      child: ElevatedButton(
+                                        onPressed: () async {
+                                          Navigator.of(dialogCtx).pop();
+                                          Navigator.of(sheetCtx).pop();
+
+                                          final result = await DataTransferService.importFromJson(
+                                            text,
+                                            wipeExisting: true,
+                                          );
+
+                                          if (result.success) {
+                                            HapticFeedback.mediumImpact();
+                                            await _initDatabaseAndLoadHabits();
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Replaced with  habits and  logs!',
+                                                  ),
+                                                  backgroundColor: const Color(0xFFFF7A00),
+                                                  duration: const Duration(seconds: 3),
+                                                ),
+                                              );
+                                            }
+                                          } else {
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(result.errorMessage ?? 'Import failed'),
+                                                  backgroundColor: const Color(0xFFEF4444),
+                                                  duration: const Duration(seconds: 4),
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        },
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(0xFF282832),
+                                          foregroundColor: const Color(0xFFFF9F0A),
+                                          elevation: 0,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(14),
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: const [
+                                            Icon(Icons.sync_rounded, size: 18),
+                                            SizedBox(width: 8),
+                                            Text(
+                                              'Replace All (Fresh Start)',
+                                              style: TextStyle(
+                                                fontFamily: '-apple-system',
+                                                fontSize: 14.5,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    SizedBox(
+                                      width: double.infinity,
+                                      height: 40,
+                                      child: TextButton(
+                                        onPressed: () => Navigator.of(dialogCtx).pop(),
+                                        style: TextButton.styleFrom(
+                                          foregroundColor: const Color(0xFF8E8E93),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(14),
+                                          ),
+                                        ),
+                                        child: const Text(
+                                          'Cancel',
+                                          style: TextStyle(
+                                            fontFamily: '-apple-system',
+                                            fontSize: 13.5,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFF7A00).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.content_paste_rounded, color: Color(0xFFFF7A00), size: 20),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: const [
+                              Text(
+                                'Paste & Inject from Clipboard',
+                                style: TextStyle(
+                                  fontFamily: '-apple-system',
+                                  color: Colors.white,
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'Instantly loads copied JSON rituals into SQLite',
+                                style: TextStyle(
+                                  fontFamily: '-apple-system',
+                                  color: Color(0xFF8E8E93),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // Option 2: Copy Backup to Clipboard
+              Material(
+                color: const Color(0xFF202025),
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () async {
+                    HapticFeedback.lightImpact();
+                    Navigator.of(sheetCtx).pop();
+                    final jsonStr = await DataTransferService.exportToJson();
+                    await Clipboard.setData(ClipboardData(text: jsonStr));
+
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Backup copied to clipboard! Save it in Notes or WhatsApp.'),
+                          backgroundColor: Color(0xFF00D672),
+                          duration: Duration(seconds: 3),
+                        ),
+                      );
+                    }
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF00D672).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.copy_rounded, color: Color(0xFF00D672), size: 20),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: const [
+                              Text(
+                                'Copy Backup to Clipboard',
+                                style: TextStyle(
+                                  fontFamily: '-apple-system',
+                                  color: Colors.white,
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'Exports all habits & logs as a JSON string',
+                                style: TextStyle(
+                                  fontFamily: '-apple-system',
+                                  color: Color(0xFF8E8E93),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // Option 3: Reset to Clean Slate
+              Material(
+                color: const Color(0xFF202025),
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () {
+                    HapticFeedback.lightImpact();
+                    showDialog(
+                      context: context,
+                      barrierColor: Colors.black.withOpacity(0.65),
+                      builder: (dialogCtx) => Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 320),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: Container(
+                              padding: const EdgeInsets.all(22),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1E1E24),
+                                borderRadius: BorderRadius.circular(22),
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text(
+                                    'Reset Everything?',
+                                    style: TextStyle(
+                                      fontFamily: '-apple-system',
+                                      color: Color(0xFFEF4444),
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  const Text(
+                                    'This will permanently delete all habits and history, returning to a completely empty app.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontFamily: '-apple-system',
+                                      color: Color(0xFF8E8E93),
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 20),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextButton(
+                                          onPressed: () => Navigator.of(dialogCtx).pop(),
+                                          child: const Text(
+                                            'Cancel',
+                                            style: TextStyle(color: Color(0xFF8E8E93), fontWeight: FontWeight.w600),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: ElevatedButton(
+                                          onPressed: () async {
+                                            Navigator.of(dialogCtx).pop();
+                                            Navigator.of(sheetCtx).pop();
+                                            await DatabaseHelper.instance.clearAllData();
+                                            await _initDatabaseAndLoadHabits();
+
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('All data cleared. Welcome to a fresh start!'),
+                                                  backgroundColor: Color(0xFF26262B),
+                                                  duration: Duration(seconds: 3),
+                                                ),
+                                              );
+                                            }
+                                          },
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: const Color(0xFFEF4444),
+                                            foregroundColor: Colors.white,
+                                            elevation: 0,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(12),
+                                            ),
+                                          ),
+                                          child: const Text('Reset', style: TextStyle(fontWeight: FontWeight.w800)),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEF4444).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444), size: 20),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: const [
+                              Text(
+                                'Reset to Clean Slate',
+                                style: TextStyle(
+                                  fontFamily: '-apple-system',
+                                  color: Color(0xFFEF4444),
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'Clears all habits & logs (fresh start)',
+                                style: TextStyle(
+                                  fontFamily: '-apple-system',
+                                  color: Color(0xFF8E8E93),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   /// Builds the handcrafted, pure black Side Panel (Drawer) displaying a clean, minimal list of habits
   Widget _buildSidePanel(HabitThemeData currentTheme) {
     return Drawer(
@@ -1652,18 +2232,18 @@ class _MainScreenState extends State<MainScreen> {
                                                 TextSpan(
                                                   children: [
                                                     TextSpan(
-                                                      text: "${habit.activeDays}",
+                                                      text: "${habit.currentStreak}d",
                                                       style: TextStyle(
                                                         fontFamily: '-apple-system',
-                                                        color: habit.color,
+                                                        color: habit.currentStreak > 0 ? habit.color : const Color(0xFF71717A),
                                                         fontSize: 12.0,
                                                         fontWeight: FontWeight.w700,
                                                         fontFeatures: const [FontFeature.tabularFigures()],
                                                       ),
                                                     ),
-                                                    TextSpan(
-                                                      text: " active ${habit.activeDays == 1 ? 'day' : 'days'} · best ",
-                                                      style: const TextStyle(
+                                                    const TextSpan(
+                                                      text: " streak · best ",
+                                                      style: TextStyle(
                                                         fontFamily: '-apple-system',
                                                         color: Color(0xFF71717A),
                                                         fontSize: 12.0,
@@ -1735,6 +2315,39 @@ class _MainScreenState extends State<MainScreen> {
                                 color: Color(0xFFA1A1AA),
                                 fontSize: 14.0,
                                 fontWeight: FontWeight.w600,
+                                letterSpacing: -0.1,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 4),
+
+                  // Handcrafted 'Backup & Restore' Row
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        closeDrawer();
+                        _showBackupRestoreSheet();
+                      },
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                        child: Row(
+                          children: const [
+                            Icon(Icons.sync_alt_rounded, size: 18, color: Color(0xFF71717A)),
+                            SizedBox(width: 10),
+                            Text(
+                              'Backup & Restore',
+                              style: TextStyle(
+                                fontFamily: '-apple-system',
+                                color: Color(0xFF8E8E93),
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w500,
                                 letterSpacing: -0.1,
                               ),
                             ),
@@ -2143,30 +2756,42 @@ class _MainScreenState extends State<MainScreen> {
                   },
                   onLogSaved: (habit, intensity, note, dateKey) {
                     setState(() {
-                      if (dateKey == _currentISTDateKey) {
-                        habit.isLoggedToday = true;
+                      if (intensity <= 0) {
+                        habit.loggedDates.remove(dateKey);
+                        habit.loggedNotes.remove(dateKey);
+                        if (dateKey == _currentISTDateKey) {
+                          habit.isLoggedToday = false;
+                        }
+                      } else {
+                        habit.loggedDates[dateKey] = intensity;
+                        if (note != null && note.isNotEmpty) {
+                          habit.loggedNotes[dateKey] = note;
+                        } else {
+                          habit.loggedNotes.remove(dateKey);
+                        }
+                        if (dateKey == _currentISTDateKey) {
+                          habit.isLoggedToday = true;
+                        }
                       }
-                      habit.loggedDates[dateKey] = intensity;
-                      if (note != null && note.isNotEmpty) {
-                        habit.loggedNotes[dateKey] = note;
-                      }
-                      habit.activeDays = habit.loggedDates.length;
-                      final currentMax = _calculateMaxStreak(habit.loggedDates);
-                      if (currentMax > habit.maxStreak) {
-                        habit.maxStreak = currentMax;
-                      }
+                      habit.activeDays = _calculateActiveDays(habit.loggedDates);
+                      habit.currentStreak = _calculateCurrentStreak(habit.loggedDates, _currentISTTime);
+                      habit.maxStreak = _calculateMaxStreak(habit.loggedDates);
                     });
 
                     final hId = int.tryParse(habit.id);
                     if (hId != null) {
-                      DatabaseHelper.instance.insertLog(
-                        DailyLog(
-                          habitId: hId,
-                          logDate: dateKey,
-                          intensity: intensity,
-                          note: note,
-                        ),
-                      );
+                      if (intensity <= 0) {
+                        DatabaseHelper.instance.deleteLog(hId, dateKey);
+                      } else {
+                        DatabaseHelper.instance.insertLog(
+                          DailyLog(
+                            habitId: hId,
+                            logDate: dateKey,
+                            intensity: intensity,
+                            note: note,
+                          ),
+                        );
+                      }
                       DatabaseHelper.instance.updateHabitStats(
                         habitId: hId,
                         activeDays: habit.activeDays,
@@ -2181,7 +2806,8 @@ class _MainScreenState extends State<MainScreen> {
                       if (dateKey == _currentISTDateKey) {
                         habit.isLoggedToday = false;
                       }
-                      habit.activeDays = habit.loggedDates.length;
+                      habit.activeDays = _calculateActiveDays(habit.loggedDates);
+                      habit.currentStreak = _calculateCurrentStreak(habit.loggedDates, _currentISTTime);
                       habit.maxStreak = _calculateMaxStreak(habit.loggedDates);
                     });
 
@@ -2501,10 +3127,10 @@ class _MainScreenState extends State<MainScreen> {
               ),
               const SizedBox(height: 4),
 
-              // Small, Refined Longest Streak Metric (Streak count number matches hero color)
+              // Refined Streak Metric: Living Streak and Personal Best
               Text.rich(
                 TextSpan(
-                  text: 'Longest streak · ',
+                  text: 'Streak ',
                   style: const TextStyle(
                     fontFamily: '-apple-system',
                     color: textSecondary,
@@ -2514,23 +3140,24 @@ class _MainScreenState extends State<MainScreen> {
                   ),
                   children: [
                     TextSpan(
-                      text: '${habit.maxStreak}',
+                      text: '${habit.currentStreak}d',
+                      style: TextStyle(
+                        fontFamily: '-apple-system',
+                        color: habit.currentStreak > 0 ? habit.color : textSecondary,
+                        fontSize: 12.0,
+                        fontWeight: FontWeight.w700,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    const TextSpan(text: ' · Best '),
+                    TextSpan(
+                      text: '${habit.maxStreak}d',
                       style: TextStyle(
                         fontFamily: '-apple-system',
                         color: habit.color,
                         fontSize: 12.0,
                         fontWeight: FontWeight.w700,
                         fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                    TextSpan(
-                      text: ' ${habit.maxStreak == 1 ? 'day' : 'days'}',
-                      style: const TextStyle(
-                        fontFamily: '-apple-system',
-                        color: textSecondary,
-                        fontSize: 12.0,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 0.1,
                       ),
                     ),
                   ],
@@ -2635,31 +3262,30 @@ class _MainScreenState extends State<MainScreen> {
 
         const SizedBox(height: 8),
 
-        // Dedicated Scrolling Months for this habit
+        // Dedicated Scrolling Months for this habit (dynamically generated from earliest log)
         Expanded(
-          child: ListView(
-            physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.only(bottom: 80),
-            children: [
-              // October 2026
-              _buildMonthHeader('October 2026'),
-              const SizedBox(height: 6),
-              _buildMonthGrid(DateTime(2026, 10, 1), habit),
-
-              const SizedBox(height: 26),
-
-              // November 2026
-              _buildMonthHeader('November 2026'),
-              const SizedBox(height: 6),
-              _buildMonthGrid(DateTime(2026, 11, 1), habit),
-
-              const SizedBox(height: 26),
-
-              // December 2026
-              _buildMonthHeader('December 2026'),
-              const SizedBox(height: 6),
-              _buildMonthGrid(DateTime(2026, 12, 1), habit),
-            ],
+          child: Builder(
+            builder: (context) {
+              final months = _getMonthsForHabit(habit);
+              return ListView.builder(
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.only(bottom: 80),
+                itemCount: months.length,
+                itemBuilder: (context, index) {
+                  final monthDate = months[index];
+                  final monthTitle = '${_getFullMonthName(monthDate.month)} ${monthDate.year}';
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildMonthHeader(monthTitle),
+                      const SizedBox(height: 6),
+                      _buildMonthGrid(monthDate, habit),
+                      const SizedBox(height: 26),
+                    ],
+                  );
+                },
+              );
+            },
           ),
         ),
       ],
